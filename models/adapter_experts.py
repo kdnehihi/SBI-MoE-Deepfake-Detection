@@ -216,8 +216,12 @@ class FFTExpert(BaseAdapterExpert):
         self.bn = nn.BatchNorm2d(config.bottleneck_dim)
 
     def _apply_local_operator(self, features: Tensor) -> Tensor:
-        freq = torch.fft.fft2(features, norm="ortho")
-        mag = torch.abs(freq)
+        if features.device.type == "mps":
+            freq = torch.fft.fft2(features.float().cpu(), norm="ortho")
+            mag = torch.abs(freq).to(features.device, dtype=features.dtype)
+        else:
+            freq = torch.fft.fft2(features, norm="ortho")
+            mag = torch.abs(freq)
         out = self.pointwise(mag)
         out = self.bn(out)
         return self.activation(out)

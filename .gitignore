@@ -16,3 +16,5 @@ runs/
 *.pt
 *.pth
 *.ckpt
+
+moeffd_colab.ipynb
