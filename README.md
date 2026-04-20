@@ -1,4 +1,4 @@
-# MoE Deepfake Detection
+# SBI-MoE-Deepfake-Detection
 
 ## Overview
 
