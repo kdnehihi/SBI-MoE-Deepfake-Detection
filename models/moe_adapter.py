@@ -48,7 +48,30 @@ class MoEAdapterLayer(nn.Module):
         expert_cls = ADAPTER_EXPERT_REGISTRY[config.name]
         return expert_cls(input_dim=input_dim, config=config)
 
-    def forward(self, tokens: Tensor, spatial_shape: tuple[int, int]) -> tuple[Tensor, AdapterAuxiliaryOutput]:
+    def _empty_aux(self, tokens: Tensor) -> AdapterAuxiliaryOutput:
+        batch_size = tokens.size(0)
+        num_experts = len(self.expert_configs)
+        router_logits = torch.zeros(batch_size, num_experts, device=tokens.device, dtype=tokens.dtype)
+        selected_experts = torch.zeros(batch_size, 1, device=tokens.device, dtype=torch.long)
+        expert_weights = torch.zeros_like(router_logits)
+        zeros = torch.zeros(num_experts, device=tokens.device, dtype=tokens.dtype)
+        return AdapterAuxiliaryOutput(
+            router_logits=router_logits,
+            selected_experts=selected_experts,
+            expert_weights=expert_weights,
+            importance=zeros,
+            load=zeros,
+        )
+
+    def forward(
+        self,
+        tokens: Tensor,
+        spatial_shape: tuple[int, int],
+        router_enabled: bool = True,
+    ) -> tuple[Tensor, AdapterAuxiliaryOutput]:
+        if not router_enabled:
+            return self.experts[0](tokens, spatial_shape), self._empty_aux(tokens)
+
         router_logits, _, _, load = self.gate(tokens)
         routing_probs = torch.softmax(router_logits, dim=-1)
         top1_values, selected_experts = torch.topk(routing_probs, k=1, dim=-1)

@@ -82,6 +82,7 @@ def parse_args() -> argparse.Namespace:
     train_parser.add_argument("--num-workers", type=int, default=4, help="DataLoader workers.")
     train_parser.add_argument("--image-size", type=int, default=224, help="Input image size.")
     train_parser.add_argument("--device", type=str, default=None, help="Device, e.g. cpu or cuda:0.")
+
     return parser.parse_args()
 
 

@@ -39,6 +39,11 @@ class MoEFFDDetector(nn.Module):
         )
         self.classifier_dropout = nn.Dropout(config.classifier.dropout)
         self.classifier = nn.Linear(self.backbone.embed_dim, config.classifier.num_classes)
+        self._configure_head_trainability()
+
+    def _configure_head_trainability(self) -> None:
+        for parameter in self.classifier.parameters():
+            parameter.requires_grad = self.config.stage.enable_classifier
 
     def forward(self, images: Tensor) -> tuple[Tensor, ModelAuxiliaryOutput]:
         tokens = self.backbone.embed_patches(images)

@@ -53,7 +53,26 @@ class MoELoRALayer(nn.Module):
         for lora_b in self.lora_b:
             nn.init.zeros_(lora_b.weight)
 
-    def forward(self, tokens: Tensor) -> tuple[Tensor, LoRAAuxiliaryOutput]:
+    def _empty_aux(self, tokens: Tensor) -> LoRAAuxiliaryOutput:
+        batch_size = tokens.size(0)
+        num_experts = len(self.expert_configs)
+        router_logits = torch.zeros(batch_size, num_experts, device=tokens.device, dtype=tokens.dtype)
+        selected_experts = torch.zeros(batch_size, 1, device=tokens.device, dtype=torch.long)
+        expert_weights = torch.zeros_like(router_logits)
+        zeros = torch.zeros(num_experts, device=tokens.device, dtype=tokens.dtype)
+        return LoRAAuxiliaryOutput(
+            router_logits=router_logits,
+            selected_experts=selected_experts,
+            expert_weights=expert_weights,
+            importance=zeros,
+            load=zeros,
+        )
+
+    def forward(self, tokens: Tensor, router_enabled: bool = True) -> tuple[Tensor, LoRAAuxiliaryOutput]:
+        if not router_enabled:
+            update = self.lora_b[0](self.lora_a[0](self.dropout[0](tokens))) * self.scaling[0]
+            return update, self._empty_aux(tokens)
+
         router_logits, _, _, load = self.gate(tokens)
         routing_probs = torch.softmax(router_logits, dim=-1)
         top1_values, selected_experts = torch.topk(routing_probs, k=1, dim=-1)

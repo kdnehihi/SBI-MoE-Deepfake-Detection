@@ -88,11 +88,21 @@ class ClassifierConfig:
 
 
 @dataclass(slots=True)
+class StageConfig:
+    name: str = "stage3"
+    enable_lora: bool = True
+    enable_adapter: bool = True
+    enable_moe_router: bool = True
+    enable_classifier: bool = True
+
+
+@dataclass(slots=True)
 class ModelConfig:
     backbone: BackboneConfig = field(default_factory=BackboneConfig)
     gating: GatingConfig = field(default_factory=GatingConfig)
     moe: MoEConfig = field(default_factory=MoEConfig)
     classifier: ClassifierConfig = field(default_factory=ClassifierConfig)
+    stage: StageConfig = field(default_factory=StageConfig)
 
 
 @dataclass(slots=True)
@@ -150,6 +160,7 @@ def load_config(path: str | Path) -> ProjectConfig:
                 ),
             ),
             classifier=ClassifierConfig(**model_payload.get("classifier", {})),
+            stage=StageConfig(**model_payload.get("stage", {})),
         ),
         optimizer=OptimizerConfig(**payload.get("optimizer", {})),
         train=TrainConfig(**payload.get("train", {})),

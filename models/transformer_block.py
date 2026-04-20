@@ -54,6 +54,23 @@ class MoETransformerBlock(nn.Module):
             experts=config.moe.adapter_experts,
             gating_config=config.gating,
         )
+        self.enable_lora = config.stage.enable_lora
+        self.enable_adapter = config.stage.enable_adapter
+        self.enable_moe_router = config.stage.enable_moe_router
+        self._configure_trainability()
+
+    @staticmethod
+    def _set_requires_grad(module: nn.Module, enabled: bool) -> None:
+        for parameter in module.parameters():
+            parameter.requires_grad = enabled
+
+    def _configure_trainability(self) -> None:
+        self._set_requires_grad(self.attn_lora, self.enable_lora)
+        self._set_requires_grad(self.adapter, self.enable_adapter)
+        if self.enable_lora and not self.enable_moe_router:
+            self._set_requires_grad(self.attn_lora.gate, False)
+        if self.enable_adapter and not self.enable_moe_router:
+            self._set_requires_grad(self.adapter.gate, False)
 
     @staticmethod
     def _drop_path(module: nn.Module | None, tokens: Tensor) -> Tensor:
@@ -82,13 +99,16 @@ class MoETransformerBlock(nn.Module):
         qkv = qkv.view(batch_size, num_tokens, 3, num_heads, head_dim).permute(2, 0, 3, 1, 4)
         query, key, value = qkv.unbind(dim=0)
 
-        qkv_delta, lora_aux = self.attn_lora(normed_tokens)
-        qkv_delta = qkv_delta.view(batch_size, num_tokens, 3, num_heads, head_dim).permute(2, 0, 3, 1, 4)
-        q_delta, k_delta, v_delta = qkv_delta.unbind(dim=0)
+        if self.enable_lora:
+            qkv_delta, lora_aux = self.attn_lora(normed_tokens, router_enabled=self.enable_moe_router)
+            qkv_delta = qkv_delta.view(batch_size, num_tokens, 3, num_heads, head_dim).permute(2, 0, 3, 1, 4)
+            q_delta, k_delta, v_delta = qkv_delta.unbind(dim=0)
 
-        query = query + q_delta
-        key = key + k_delta
-        value = value + v_delta
+            query = query + q_delta
+            key = key + k_delta
+            value = value + v_delta
+        else:
+            lora_aux = self.attn_lora._empty_aux(normed_tokens)
 
         scores = (query @ key.transpose(-2, -1)) * attention.scale
         attention_probs = scores.softmax(dim=-1)
@@ -117,8 +137,16 @@ class MoETransformerBlock(nn.Module):
         mlp_input = self.frozen_block.norm2(tokens)
         mlp_output = self.frozen_block.mlp(mlp_input)
         spatial_shape = self._infer_spatial_shape(tokens.size(1))
-        adapter_output, adapter_aux = self.adapter(mlp_input, spatial_shape)
-        residual_output = mlp_output + adapter_output
+        if self.enable_adapter:
+            adapter_output, adapter_aux = self.adapter(
+                mlp_input,
+                spatial_shape,
+                router_enabled=self.enable_moe_router,
+            )
+            residual_output = mlp_output + adapter_output
+        else:
+            adapter_aux = self.adapter._empty_aux(mlp_input)
+            residual_output = mlp_output
 
         ls2 = getattr(self.frozen_block, "ls2", None)
         if ls2 is not None:
