@@ -19,6 +19,7 @@ from utils.config import DatasetSpec, ModelConfig, OptimizerConfig, TrainConfig
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train baseline clean dataset.")
     parser.add_argument("--dataset-root", type=str, default="data/baseline")
+    parser.add_argument("--output-dir", type=str, default="outputs")
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--num-workers", type=int, default=4)
@@ -37,6 +38,7 @@ def build_loader(dataset_root: Path, manifest_name: str, split_name: str, image_
         manifest_path=str(dataset_root / manifest_name),
     )
     dataset = build_dataset(spec)
+    print(f"{split_name}: {len(dataset)} samples from {dataset_root / manifest_name}")
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
 
 
@@ -81,7 +83,7 @@ def main() -> None:
         f"acc={celebdf_eval['metrics'].accuracy:.4f} | auc={celebdf_eval['metrics'].auc:.4f}"
     )
 
-    output_dir = Path("outputs")
+    output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = output_dir / "baseline_clean_last.pt"
     torch.save(
