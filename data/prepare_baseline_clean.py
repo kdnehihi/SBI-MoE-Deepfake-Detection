@@ -18,6 +18,7 @@ from data.sampler import (
     load_manifest,
     save_manifest,
     sample_without_replacement,
+    split_by_group,
 )
 
 
@@ -47,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--celebdf-root", type=str, default="data/processed/celebdf")
     parser.add_argument("--ffpp-root", type=str, default="data/processed/ffpp_generalization")
     parser.add_argument("--output-root", type=str, default="data/baseline")
+    parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -63,19 +65,30 @@ def main() -> None:
     ffpp_train = load_manifest(ffpp_root / "ffpp_generalization_train_manifest.jsonl")
     ffpp_test = load_manifest(ffpp_root / "ffpp_generalization_test_manifest.jsonl")
 
-    train_real_pool = filter_by_label(celebdf_train, 0) + filter_by_label(ffpp_train, 0)
-    train_fake_pool = filter_ffpp_fake_types(ffpp_train, FFPP_FAKE_TYPES)
+    real_pool = filter_by_label(celebdf_train, 0) + filter_by_label(ffpp_train, 0)
+    fake_pool = filter_ffpp_fake_types(ffpp_train, FFPP_FAKE_TYPES)
+
+    train_real_pool, val_real_pool = split_by_group(real_pool, args.val_ratio, seed=args.seed, key="source_video")
+    train_fake_pool, val_fake_pool = split_by_group(fake_pool, args.val_ratio, seed=args.seed + 1, key="source_video")
 
     ratios = {"real": 0.4, "fake": 0.6}
-    total_target = compute_total_target(
+    train_total_target = compute_total_target(
         {"real": len(train_real_pool), "fake": len(train_fake_pool)},
         ratios,
     )
-    counts = compute_counts(total_target, ratios)
+    val_total_target = compute_total_target(
+        {"real": len(val_real_pool), "fake": len(val_fake_pool)},
+        ratios,
+    )
+    train_counts = compute_counts(train_total_target, ratios)
+    val_counts = compute_counts(val_total_target, ratios)
 
-    train_real = sample_without_replacement(train_real_pool, counts["real"], seed=args.seed)
-    train_fake = sample_without_replacement(train_fake_pool, counts["fake"], seed=args.seed + 1)
+    train_real = sample_without_replacement(train_real_pool, train_counts["real"], seed=args.seed)
+    train_fake = sample_without_replacement(train_fake_pool, train_counts["fake"], seed=args.seed + 1)
     train_samples = train_real + train_fake
+    val_real = sample_without_replacement(val_real_pool, val_counts["real"], seed=args.seed + 2)
+    val_fake = sample_without_replacement(val_fake_pool, val_counts["fake"], seed=args.seed + 3)
+    val_samples = val_real + val_fake
 
     ffpp_test_samples = filter_by_label(ffpp_test, 0) + filter_ffpp_fake_types(ffpp_test, FFPP_FAKE_TYPES)
     celebdf_test_samples = filter_by_label(celebdf_test, 0) + filter_by_label(celebdf_test, 1)
@@ -83,14 +96,16 @@ def main() -> None:
     output_root.mkdir(parents=True, exist_ok=True)
 
     train_manifest_path = output_root / "train_manifest.jsonl"
+    val_manifest_path = output_root / "val_manifest.jsonl"
     ffpp_manifest_path = output_root / "test_ffpp_manifest.jsonl"
     celebdf_manifest_path = output_root / "test_celebdf_manifest.jsonl"
 
     if not args.overwrite:
-        existing = [train_manifest_path, ffpp_manifest_path, celebdf_manifest_path]
+        existing = [train_manifest_path, val_manifest_path, ffpp_manifest_path, celebdf_manifest_path]
         if all(path.exists() for path in existing):
             print("Baseline manifests already exist. Use --overwrite to rebuild them.")
             print("Train manifest:", train_manifest_path)
+            print("Val manifest:", val_manifest_path)
             print("FF++ test manifest:", ffpp_manifest_path)
             print("Celeb-DF test manifest:", celebdf_manifest_path)
             return
@@ -99,18 +114,25 @@ def main() -> None:
         resolve_image_path(sample, celebdf_root if sample.get("dataset_name") == "CelebDF" else ffpp_root)
         for sample in train_samples
     ]
+    val_manifest_samples = [
+        resolve_image_path(sample, celebdf_root if sample.get("dataset_name") == "CelebDF" else ffpp_root)
+        for sample in val_samples
+    ]
     ffpp_manifest_samples = [resolve_image_path(sample, ffpp_root) for sample in ffpp_test_samples]
     celebdf_manifest_samples = [resolve_image_path(sample, celebdf_root) for sample in celebdf_test_samples]
 
     save_manifest(train_manifest_samples, train_manifest_path)
+    save_manifest(val_manifest_samples, val_manifest_path)
     save_manifest(ffpp_manifest_samples, ffpp_manifest_path)
     save_manifest(celebdf_manifest_samples, celebdf_manifest_path)
 
     print("Baseline clean dataset prepared.")
     print("Train manifest:", train_manifest_path)
+    print("Val manifest:", val_manifest_path)
     print("FF++ test manifest:", ffpp_manifest_path)
     print("Celeb-DF test manifest:", celebdf_manifest_path)
     print("Train counts:", {"real": len(train_real), "fake": len(train_fake), "total": len(train_samples)})
+    print("Val counts:", {"real": len(val_real), "fake": len(val_fake), "total": len(val_samples)})
 
 
 if __name__ == "__main__":

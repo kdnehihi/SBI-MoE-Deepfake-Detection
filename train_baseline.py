@@ -57,15 +57,6 @@ def _print_eval_summary(prefix: str, ffpp_eval: dict, celebdf_eval: dict) -> Non
     )
 
 
-def _print_epoch_auc_summary(prefix: str, ffpp_eval: dict, celebdf_eval: dict) -> None:
-    all_evals = [ffpp_eval, celebdf_eval]
-    print(
-        f"{prefix} "
-        f"frame_auc={_average_metric(all_evals, 'auc'):.4f} | "
-        f"video_auc={_average_metric(all_evals, 'auc', video_level=True):.4f}"
-    )
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train baseline clean dataset.")
     parser.add_argument("--dataset-root", type=str, default="data/baseline")
@@ -130,6 +121,7 @@ def main() -> None:
         max_samples=args.max_train_samples,
         seed=args.seed,
     )
+    val_loader = build_loader(dataset_root, "val_manifest.jsonl", "val", args.image_size, args.batch_size, args.num_workers, False)
     ffpp_test_loader = build_loader(dataset_root, "test_ffpp_manifest.jsonl", "test_ffpp", args.image_size, args.batch_size, args.num_workers, False)
     celebdf_test_loader = build_loader(dataset_root, "test_celebdf_manifest.jsonl", "test_celebdf", args.image_size, args.batch_size, args.num_workers, False)
 
@@ -154,16 +146,7 @@ def main() -> None:
     )
     ffpp_evaluator = Evaluator(model, ffpp_test_loader, criterion, device)
     celebdf_evaluator = Evaluator(model, celebdf_test_loader, criterion, device)
-
-    def on_epoch_end(epoch: int, record: dict) -> None:
-        ffpp_eval = ffpp_evaluator.evaluate()
-        celebdf_eval = celebdf_evaluator.evaluate()
-        record["ffpp_eval"] = ffpp_eval
-        record["celebdf_eval"] = celebdf_eval
-        _print_epoch_auc_summary(f"Epoch {epoch}/{args.epochs} | test", ffpp_eval, celebdf_eval)
-
-    trainer.on_epoch_end = on_epoch_end
-    history = trainer.fit()
+    history = trainer.fit(val_loader=val_loader)
 
     ffpp_eval = ffpp_evaluator.evaluate()
     celebdf_eval = celebdf_evaluator.evaluate()
