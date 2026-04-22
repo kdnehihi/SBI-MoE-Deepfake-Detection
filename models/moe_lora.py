@@ -73,14 +73,14 @@ class MoELoRALayer(nn.Module):
             update = self.lora_b[0](self.lora_a[0](self.dropout[0](tokens))) * self.scaling[0]
             return update, self._empty_aux(tokens)
 
-        router_logits, _, _, load = self.gate(tokens)
+        batch_size, num_tokens, hidden_dim = tokens.shape
+        flat_tokens = tokens.reshape(batch_size * num_tokens, hidden_dim)
+        router_logits, _, _, load = self.gate(flat_tokens)
         routing_probs = torch.softmax(router_logits, dim=-1)
         top1_values, selected_experts = torch.topk(routing_probs, k=1, dim=-1)
 
-        batch_size, num_tokens, _ = tokens.shape
         weighted_update = torch.zeros(
-            batch_size,
-            num_tokens,
+            batch_size * num_tokens,
             self.output_dim * 3,
             device=tokens.device,
             dtype=tokens.dtype,
@@ -96,10 +96,15 @@ class MoELoRALayer(nn.Module):
             if not sample_mask.any():
                 continue
 
-            expert_input = tokens[sample_mask]
+            expert_input = flat_tokens[sample_mask]
             update = lora_b(lora_a(dropout(expert_input))) * scale
-            update = top1_values[sample_mask].view(-1, 1, 1) * update
+            update = top1_values[sample_mask] * update
             weighted_update[sample_mask] = update
+
+        weighted_update = weighted_update.view(batch_size, num_tokens, self.output_dim * 3)
+        expert_weights = expert_weights.view(batch_size, num_tokens, -1).mean(dim=1)
+        selected_experts = selected_experts.view(batch_size, num_tokens, -1)[:, :, 0]
+        router_logits = router_logits.view(batch_size, num_tokens, -1).mean(dim=1)
 
         aux = LoRAAuxiliaryOutput(
             router_logits=router_logits,

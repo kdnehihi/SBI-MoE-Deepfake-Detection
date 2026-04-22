@@ -21,9 +21,16 @@ class LossOutput:
 class MoEFFDLoss(nn.Module):
     """Combines cross-entropy with the MoE load-balancing objective."""
 
-    def __init__(self, load_balance_weight: float) -> None:
+    def __init__(
+        self,
+        load_balance_weight: float,
+        lora_balance_scale: float = 200.0,
+        adapter_balance_scale: float = 1.0,
+    ) -> None:
         super().__init__()
         self.load_balance_weight = load_balance_weight
+        self.lora_balance_scale = lora_balance_scale
+        self.adapter_balance_scale = adapter_balance_scale
 
     @staticmethod
     def _cv_squared(values: Tensor) -> Tensor:
@@ -35,22 +42,23 @@ class MoEFFDLoss(nn.Module):
     def forward(self, logits: Tensor, labels: Tensor, aux: ModelAuxiliaryOutput) -> LossOutput:
         classification = F.cross_entropy(logits, labels)
 
-        balance_terms: list[Tensor] = []
+        lora_terms: list[Tensor] = []
+        adapter_terms: list[Tensor] = []
         for block_aux in aux.blocks:
             lora_importance = block_aux.lora.qkv.importance
             lora_load = block_aux.lora.qkv.load
             adapter_importance = block_aux.adapter.importance
             adapter_load = block_aux.adapter.load
 
-            balance_terms.append(self._cv_squared(lora_importance))
-            balance_terms.append(self._cv_squared(lora_load))
-            balance_terms.append(self._cv_squared(adapter_importance))
-            balance_terms.append(self._cv_squared(adapter_load))
+            lora_terms.append(self._cv_squared(lora_importance))
+            lora_terms.append(self._cv_squared(lora_load))
+            adapter_terms.append(self._cv_squared(adapter_importance))
+            adapter_terms.append(self._cv_squared(adapter_load))
 
-        if balance_terms:
-            load_balance = torch.stack(balance_terms).mean()
-        else:
-            load_balance = torch.zeros(1, device=logits.device, dtype=logits.dtype).squeeze(0)
+        zero = torch.zeros(1, device=logits.device, dtype=logits.dtype).squeeze(0)
+        lora_balance = torch.stack(lora_terms).mean() if lora_terms else zero
+        adapter_balance = torch.stack(adapter_terms).mean() if adapter_terms else zero
+        load_balance = (self.lora_balance_scale * lora_balance) + (self.adapter_balance_scale * adapter_balance)
 
         total = classification + (self.load_balance_weight * load_balance)
         return LossOutput(total=total, classification=classification, load_balance=load_balance)

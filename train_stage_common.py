@@ -64,7 +64,11 @@ def run_stage_training(
     model = MoEFFDDetector(model_config).to(device)
     maybe_load_checkpoint(model, init_checkpoint)
 
-    criterion = MoEFFDLoss(load_balance_weight=model_config.moe.load_balance_weight)
+    criterion = MoEFFDLoss(
+        load_balance_weight=model_config.moe.load_balance_weight,
+        lora_balance_scale=model_config.moe.lora_balance_scale,
+        adapter_balance_scale=model_config.moe.adapter_balance_scale,
+    )
     trainer = Trainer(
         model=model,
         train_loader=train_loader,

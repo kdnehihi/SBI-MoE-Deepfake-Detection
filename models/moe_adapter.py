@@ -72,7 +72,8 @@ class MoEAdapterLayer(nn.Module):
         if not router_enabled:
             return self.experts[0](tokens, spatial_shape), self._empty_aux(tokens)
 
-        router_logits, _, _, load = self.gate(tokens)
+        pooled_tokens = tokens.mean(dim=1)
+        router_logits, _, _, load = self.gate(pooled_tokens)
         routing_probs = torch.softmax(router_logits, dim=-1)
         top1_values, selected_experts = torch.topk(routing_probs, k=1, dim=-1)
 

@@ -67,6 +67,10 @@ class MoETransformerBlock(nn.Module):
     def _configure_trainability(self) -> None:
         self._set_requires_grad(self.attn_lora, self.enable_lora)
         self._set_requires_grad(self.adapter, self.enable_adapter)
+        norm1 = getattr(self.frozen_block, "norm1", None)
+        if norm1 is not None:
+            for parameter in norm1.parameters():
+                parameter.requires_grad = True
         if self.enable_lora and not self.enable_moe_router:
             self._set_requires_grad(self.attn_lora.gate, False)
         if self.enable_adapter and not self.enable_moe_router:
@@ -127,6 +131,7 @@ class MoETransformerBlock(nn.Module):
         return context, lora_aux
 
     def forward(self, tokens: Tensor) -> tuple[Tensor, BlockAuxiliaryOutput]:
+        self.frozen_block.eval()
         attn_output, lora_aux = self._attention_with_moe(tokens)
         ls1 = getattr(self.frozen_block, "ls1", None)
         if ls1 is not None:

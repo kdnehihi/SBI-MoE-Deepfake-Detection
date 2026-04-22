@@ -60,22 +60,28 @@ class AdapterExpertConfig:
 class MoEConfig:
     lora_experts: list[LoRAExpertConfig] = field(
         default_factory=lambda: [
-            LoRAExpertConfig(rank=2, alpha=2.0),
-            LoRAExpertConfig(rank=4, alpha=4.0),
             LoRAExpertConfig(rank=8, alpha=8.0),
+            LoRAExpertConfig(rank=16, alpha=16.0),
+            LoRAExpertConfig(rank=32, alpha=32.0),
+            LoRAExpertConfig(rank=48, alpha=48.0),
+            LoRAExpertConfig(rank=64, alpha=64.0),
+            LoRAExpertConfig(rank=96, alpha=96.0),
+            LoRAExpertConfig(rank=128, alpha=128.0),
         ]
     )
     adapter_experts: list[AdapterExpertConfig] = field(
         default_factory=lambda: [
-            AdapterExpertConfig(name="vanilla_conv", bottleneck_dim=64),
-            AdapterExpertConfig(name="adc", bottleneck_dim=64),
-            AdapterExpertConfig(name="cdc", bottleneck_dim=64),
-            AdapterExpertConfig(name="rdc", bottleneck_dim=64),
-            AdapterExpertConfig(name="soc", bottleneck_dim=64),
+            AdapterExpertConfig(name="vanilla_conv", bottleneck_dim=8),
+            AdapterExpertConfig(name="adc", bottleneck_dim=8),
+            AdapterExpertConfig(name="cdc", bottleneck_dim=8),
+            AdapterExpertConfig(name="rdc", bottleneck_dim=8),
+            AdapterExpertConfig(name="soc", bottleneck_dim=8),
         ]
     )
     top_k: int = 1
     load_balance_weight: float = 0.01
+    lora_balance_scale: float = 200.0
+    adapter_balance_scale: float = 1.0
 
 
 @dataclass(slots=True)
@@ -154,6 +160,14 @@ def load_config(path: str | Path) -> ProjectConfig:
                 load_balance_weight=moe_payload.get(
                     "load_balance_weight",
                     MoEConfig().load_balance_weight,
+                ),
+                lora_balance_scale=moe_payload.get(
+                    "lora_balance_scale",
+                    MoEConfig().lora_balance_scale,
+                ),
+                adapter_balance_scale=moe_payload.get(
+                    "adapter_balance_scale",
+                    MoEConfig().adapter_balance_scale,
                 ),
             ),
             classifier=ClassifierConfig(**model_payload.get("classifier", {})),

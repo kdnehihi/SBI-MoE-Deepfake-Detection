@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
@@ -9,164 +11,183 @@ from torch import Tensor, nn
 from utils.config import AdapterExpertConfig
 
 
+def create_conv_func(op_type: str):
+    if op_type not in {"cv", "cd", "ad", "rd", "scd"}:
+        raise ValueError(f"unknown op type: {op_type}")
+
+    if op_type == "cv":
+        return F.conv2d
+
+    if op_type == "cd":
+        def func(x, weights, bias=None, stride=1, padding=0, dilation=1, groups=1):
+            weights_c = weights.sum(dim=[2, 3]) - weights[:, :, 1, 1]
+            weights_c = weights_c[:, :, None, None]
+            yc = F.conv2d(x, weights_c, stride=stride, padding=0, groups=groups)
+            y = F.conv2d(x, weights, bias, stride=stride, padding=padding, dilation=dilation, groups=groups)
+            return y - yc
+
+        return func
+
+    if op_type == "ad":
+        def func(x, weights, bias=None, stride=1, padding=0, dilation=1, groups=1):
+            shape = weights.shape
+            flat = weights.view(shape[0], shape[1], -1)
+            rotated = flat[:, :, [3, 0, 1, 6, 4, 2, 7, 8, 5]].clone()
+            rotated[:, :, 4] = 0.0
+            weights_conv = (flat - rotated).view(shape)
+            return F.conv2d(x, weights_conv, bias, stride=stride, padding=padding, dilation=dilation, groups=groups)
+
+        return func
+
+    if op_type == "rd":
+        def func(x, weights, bias=None, stride=1, padding=0, dilation=1, groups=1):
+            shape = weights.shape
+            buffer = weights.new_zeros(shape[0], shape[1], 25)
+            flat = weights.view(shape[0], shape[1], -1)
+            buffer[:, :, [0, 2, 4, 10, 14, 20, 22, 24]] = flat[:, :, 1:]
+            buffer[:, :, [6, 7, 8, 11, 13, 16, 17, 18]] = -flat[:, :, 1:]
+            buffer[:, :, 12] = flat[:, :, 0]
+            buffer = buffer.view(shape[0], shape[1], 5, 5)
+            return F.conv2d(x, buffer, bias, stride=stride, padding=2 * dilation, dilation=dilation, groups=groups)
+
+        return func
+
+    def func(x, weights, bias=None, stride=1, padding=0, dilation=1, groups=1):
+        shape = weights.shape
+        buffer = weights.new_zeros(shape[0], shape[1], 25)
+        flat = weights.view(shape[0], shape[1], -1)
+        buffer[:, :, [0, 2, 4, 10, 14, 20, 22, 24]] = flat[:, :, 1:]
+        buffer[:, :, [6, 7, 8, 11, 13, 16, 17, 18]] = -flat[:, :, 1:] * 2.0
+        buffer[:, :, 12] = flat.sum(dim=2)
+        buffer = buffer.view(shape[0], shape[1], 5, 5)
+        return F.conv2d(x, buffer, bias, stride=stride, padding=2 * dilation, dilation=dilation, groups=groups)
+
+    return func
+
+
+class Conv2dDiff(nn.Module):
+    """Difference convolution used in the original adapter experts."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+        dilation: int = 1,
+        groups: int = 1,
+        bias: bool = False,
+        op_type: str = "cv",
+    ) -> None:
+        super().__init__()
+        self.stride = stride
+        self.padding = padding
+        self.dilation = dilation
+        self.groups = groups
+        self.weight = nn.Parameter(
+            torch.empty(out_channels, in_channels // groups, kernel_size, kernel_size)
+        )
+        if bias:
+            self.bias = nn.Parameter(torch.empty(out_channels))
+        else:
+            self.register_parameter("bias", None)
+        self.func = create_conv_func(op_type)
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
+            bound = 1.0 / math.sqrt(fan_in)
+            nn.init.uniform_(self.bias, -bound, bound)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.func(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+
+
 class BaseAdapterExpert(nn.Module):
     """Base class shared by the local feature adapter experts."""
 
     expert_name = "base"
+    op_type = "cv"
 
     def __init__(self, input_dim: int, config: AdapterExpertConfig) -> None:
         super().__init__()
         self.input_dim = input_dim
         self.config = config
-        self.down_proj = nn.Linear(input_dim, config.bottleneck_dim)
-        self.activation = nn.GELU()
-        self.up_proj = nn.Linear(config.bottleneck_dim, input_dim)
-        self.pre_norm = nn.LayerNorm(input_dim)
-        self.post_norm = nn.LayerNorm(input_dim)
+        self.adapter_dim = config.bottleneck_dim
+        self.adapter_down = nn.Linear(input_dim, self.adapter_dim)
+        self.adapter_up = nn.Linear(self.adapter_dim, input_dim)
+        nn.init.xavier_uniform_(self.adapter_down.weight)
+        nn.init.zeros_(self.adapter_down.bias)
+        nn.init.zeros_(self.adapter_up.weight)
+        nn.init.zeros_(self.adapter_up.bias)
+
+        self.adapter_conv = Conv2dDiff(
+            self.adapter_dim,
+            self.adapter_dim,
+            kernel_size=config.kernel_size,
+            stride=1,
+            padding=config.kernel_size // 2,
+            bias=True,
+            op_type=self.op_type,
+        )
+        nn.init.zeros_(self.adapter_conv.weight)
+        eye = torch.eye(self.adapter_dim, dtype=self.adapter_conv.weight.dtype)
+        center = config.kernel_size // 2
+        self.adapter_conv.weight.data[:, :, center, center] += eye
+        if self.adapter_conv.bias is not None:
+            nn.init.zeros_(self.adapter_conv.bias)
 
     @staticmethod
-    def _split_cls_token(tokens: Tensor, spatial_shape: tuple[int, int]) -> tuple[Tensor | None, Tensor]:
+    def _split_cls_token(tokens: Tensor, spatial_shape: tuple[int, int]) -> tuple[Tensor, Tensor]:
         expected_patches = spatial_shape[0] * spatial_shape[1]
-        if tokens.size(1) == expected_patches + 1:
-            return tokens[:, :1], tokens[:, 1:]
-        if tokens.size(1) == expected_patches:
-            return None, tokens
-        raise ValueError(
-            f"Token count {tokens.size(1)} does not match spatial shape {spatial_shape}."
-        )
-
-    def _tokens_to_feature_map(self, patch_tokens: Tensor, spatial_shape: tuple[int, int]) -> Tensor:
-        batch_size, _, channels = patch_tokens.shape
-        height, width = spatial_shape
-        features = patch_tokens.view(batch_size, height, width, channels).permute(0, 3, 1, 2).contiguous()
-        return features
-
-    def _feature_map_to_tokens(self, features: Tensor) -> Tensor:
-        batch_size, channels, height, width = features.shape
-        return features.permute(0, 2, 3, 1).contiguous().view(batch_size, height * width, channels)
-
-    def _apply_local_operator(self, features: Tensor) -> Tensor:
-        raise NotImplementedError(f"{self.__class__.__name__} must implement _apply_local_operator.")
+        if tokens.size(1) != expected_patches + 1:
+            raise ValueError(f"Token count {tokens.size(1)} does not match spatial shape {spatial_shape}.")
+        return tokens[:, :1], tokens[:, 1:]
 
     def forward(self, tokens: Tensor, spatial_shape: tuple[int, int]) -> Tensor:
+        batch_size, _, _ = tokens.shape
+        height, width = spatial_shape
         cls_token, patch_tokens = self._split_cls_token(tokens, spatial_shape)
-        patch_tokens = self.pre_norm(patch_tokens)
-        patch_tokens = self.activation(self.down_proj(patch_tokens))
-        features = self._tokens_to_feature_map(patch_tokens, spatial_shape)
-        features = self._apply_local_operator(features)
-        patch_tokens = self._feature_map_to_tokens(features)
-        patch_tokens = self.up_proj(self.activation(patch_tokens))
-        patch_tokens = self.post_norm(patch_tokens)
-        if cls_token is None:
-            return patch_tokens
-        cls_delta = self.pre_norm(cls_token)
-        cls_delta = self.activation(self.down_proj(cls_delta))
-        cls_delta = self.up_proj(self.activation(cls_delta))
-        cls_delta = self.post_norm(cls_delta)
-        return torch.cat([cls_delta, patch_tokens], dim=1)
+
+        down_tokens = self.adapter_down(tokens)
+        patch_map = down_tokens[:, 1:].reshape(batch_size, height, width, self.adapter_dim).permute(0, 3, 1, 2)
+        patch_map = self.adapter_conv(patch_map)
+        patch_tokens = patch_map.permute(0, 2, 3, 1).reshape(batch_size, height * width, self.adapter_dim)
+
+        cls_map = down_tokens[:, :1].reshape(batch_size, 1, 1, self.adapter_dim).permute(0, 3, 1, 2)
+        cls_map = self.adapter_conv(cls_map)
+        cls_token = cls_map.permute(0, 2, 3, 1).reshape(batch_size, 1, self.adapter_dim)
+
+        adapted = torch.cat([cls_token, patch_tokens], dim=1)
+        return self.adapter_up(adapted)
 
 
-class DepthwiseConvAdapterExpert(BaseAdapterExpert):
-    """Shared convolutional bottleneck used by local adapter experts."""
-
-    def __init__(self, input_dim: int, config: AdapterExpertConfig) -> None:
-        super().__init__(input_dim=input_dim, config=config)
-        padding = config.kernel_size // 2
-        self.depthwise = nn.Conv2d(
-            config.bottleneck_dim,
-            config.bottleneck_dim,
-            kernel_size=config.kernel_size,
-            padding=padding,
-            groups=config.bottleneck_dim,
-            bias=False,
-        )
-        self.pointwise = nn.Conv2d(config.bottleneck_dim, config.bottleneck_dim, kernel_size=1, bias=False)
-        self.bn = nn.BatchNorm2d(config.bottleneck_dim)
-
-    def _post_process(self, features: Tensor) -> Tensor:
-        features = self.pointwise(features)
-        features = self.bn(features)
-        return self.activation(features)
-
-    def _apply_local_operator(self, features: Tensor) -> Tensor:
-        raise NotImplementedError
-
-    @staticmethod
-    def _shift(features: Tensor, shift_y: int, shift_x: int) -> Tensor:
-        pad_top = max(shift_y, 0)
-        pad_bottom = max(-shift_y, 0)
-        pad_left = max(shift_x, 0)
-        pad_right = max(-shift_x, 0)
-        padded = F.pad(features, (pad_left, pad_right, pad_top, pad_bottom))
-        height, width = features.shape[-2:]
-        start_y = pad_bottom
-        start_x = pad_right
-        end_y = start_y + height
-        end_x = start_x + width
-        return padded[:, :, start_y:end_y, start_x:end_x]
-
-
-class VanillaConvExpert(DepthwiseConvAdapterExpert):
+class VanillaConvExpert(BaseAdapterExpert):
     expert_name = "vanilla_conv"
-
-    def _apply_local_operator(self, features: Tensor) -> Tensor:
-        features = self.depthwise(features)
-        return self._post_process(features)
+    op_type = "cv"
 
 
-class ADCExpert(DepthwiseConvAdapterExpert):
+class ADCExpert(BaseAdapterExpert):
     expert_name = "adc"
-
-    def _apply_local_operator(self, features: Tensor) -> Tensor:
-        nw = self._shift(features, -1, -1)
-        ne = self._shift(features, -1, 1)
-        sw = self._shift(features, 1, -1)
-        se = self._shift(features, 1, 1)
-        angular_difference = 0.25 * ((nw + se) - (ne + sw))
-        return self._post_process(self.depthwise(features) - angular_difference)
+    op_type = "ad"
 
 
-class CDCExpert(DepthwiseConvAdapterExpert):
+class CDCExpert(BaseAdapterExpert):
     expert_name = "cdc"
-
-    def _apply_local_operator(self, features: Tensor) -> Tensor:
-        base = self.depthwise(features)
-        kernel_sum = self.depthwise.weight.sum(dim=(2, 3), keepdim=True).view(1, -1, 1, 1)
-        center_response = features * kernel_sum
-        return self._post_process(base - center_response)
+    op_type = "cd"
 
 
-class RDCExpert(DepthwiseConvAdapterExpert):
+class RDCExpert(BaseAdapterExpert):
     expert_name = "rdc"
-
-    def _apply_local_operator(self, features: Tensor) -> Tensor:
-        up = self._shift(features, -1, 0)
-        down = self._shift(features, 1, 0)
-        left = self._shift(features, 0, -1)
-        right = self._shift(features, 0, 1)
-        radial_context = 0.25 * (up + down + left + right)
-        return self._post_process(self.depthwise(features) - radial_context)
+    op_type = "rd"
 
 
 class SOCExpert(BaseAdapterExpert):
     expert_name = "soc"
-
-    def __init__(self, input_dim: int, config: AdapterExpertConfig) -> None:
-        super().__init__(input_dim=input_dim, config=config)
-        kernel = torch.tensor(
-            [[0.0, 1.0, 0.0], [1.0, -4.0, 1.0], [0.0, 1.0, 0.0]],
-            dtype=torch.float32,
-        )
-        kernel = kernel.view(1, 1, 3, 3).repeat(config.bottleneck_dim, 1, 1, 1)
-        self.register_buffer("kernel", kernel)
-        self.pointwise = nn.Conv2d(config.bottleneck_dim, config.bottleneck_dim, kernel_size=1, bias=False)
-        self.bn = nn.BatchNorm2d(config.bottleneck_dim)
-
-    def _apply_local_operator(self, features: Tensor) -> Tensor:
-        out = F.conv2d(features, self.kernel, padding=1, groups=features.size(1))
-        out = self.pointwise(out)
-        out = self.bn(out)
-        return self.activation(out)
+    op_type = "scd"
 
 
 ADAPTER_EXPERT_REGISTRY = {
