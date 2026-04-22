@@ -40,9 +40,10 @@ class Trainer:
         self.state = TrainerState()
         self.device = str(next(model.parameters()).device)
         self.optimizer = self.build_optimizer()
+        self.scheduler = self.build_scheduler()
         self.use_amp = train_config.amp and self.device.startswith("cuda")
         self.autocast_device = "cuda" if self.device.startswith("cuda") else "cpu"
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
 
     def build_optimizer(self):
         gating_parameters = []
@@ -75,6 +76,13 @@ class Trainer:
             )
 
         return torch.optim.Adam(param_groups)
+
+    def build_scheduler(self):
+        return torch.optim.lr_scheduler.StepLR(
+            self.optimizer,
+            step_size=self.optimizer_config.scheduler_step_size,
+            gamma=self.optimizer_config.scheduler_gamma,
+        )
 
     def train_epoch(self):
         self.model.train()
@@ -185,6 +193,7 @@ class Trainer:
             if on_epoch_end is not None:
                 on_epoch_end(self.state.epoch, record)
 
+            self.scheduler.step()
             history.append(record)
 
         return history

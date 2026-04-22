@@ -23,36 +23,38 @@ The baseline must remain runnable and unchanged in spirit even as the staged fra
 
 ### Training policy
 
-Train:
+Paper-like baseline protocol:
+
+- Train: `FF++ train`
+- Valid: `FF++ valid`, split from `FF++ train` at video level
+- Test-1: `FF++ test`
+- Test-2: `Celeb-DF test` as out-of-domain evaluation
+
+Within FF++:
 
 - Real:
-  - Celeb-DF real frames
-  - FF++ original frames
+  - `original`
 - Fake:
-  - FF++ only
   - `Deepfakes`
   - `FaceSwap`
   - `Face2Face`
   - `NeuralTextures`
 
-Sampling ratio:
-
-- Real: `40%`
-- Fake: `60%`
-
 Important:
 
-- baseline fake data remains `100% FF++`
+- baseline training data remains `100% FF++`
+- Celeb-DF is not used in baseline training
 - no SBI
 - no staged curriculum
-- same MoE-FFD-style architecture
+- same MoE-FFD-style architecture, pulled closer to the paper
 - frozen ViT backbone
-- standard binary classification training
+- paper-like video evaluation during validation and testing
 
 ### Evaluation policy
 
-- `FF++` as in-domain test
-- `Celeb-DF` as out-of-domain test
+- validation uses FF++ videos
+- `FF++` remains the in-domain test
+- `Celeb-DF` remains the out-of-domain test
 
 ## Staged Training Mode
 
@@ -145,7 +147,8 @@ The staged pipeline is sequential:
 - Celeb-DF raw videos are no longer required.
 - FF++ may be re-extracted from raw videos as needed.
 - Existing extracted frames are not deleted unless the new FF++ extraction pipeline is explicitly run with reset enabled.
-- train/test leakage should be avoided; the code prefers source-video-level separation where possible.
+- train/valid/test leakage should be avoided; the code uses source-video-level separation where possible.
+- current processed manifests contain about `7-8` frames per video, so the video-style evaluator can request `20` or `100` frames but will only use the available extracted frames unless FF++ / Celeb-DF are re-extracted more densely.
 
 ## Repository Structure
 
@@ -214,40 +217,58 @@ Notes:
 python data/prepare_baseline_clean.py \
   --celebdf-root data/processed/celebdf \
   --ffpp-root data/processed/ffpp_generalization \
-  --output-root data/baseline
+  --output-root data/baseline \
+  --val-ratio 0.125 \
+  --overwrite
 ```
 
 Output structure:
 
 ```text
 data/baseline/
-├── train/
-│   ├── real/
-│   └── fake/
-├── test_ffpp/
-│   ├── real/
-│   └── fake/
-├── test_celebdf/
-│   ├── real/
-│   └── fake/
 ├── train_manifest.jsonl
+├── val_manifest.jsonl
 ├── test_ffpp_manifest.jsonl
 └── test_celebdf_manifest.jsonl
 ```
+
+Notes:
+
+- `train_manifest.jsonl` and `val_manifest.jsonl` are both built from `FF++ train`
+- validation is split at video level, stratified by manipulation type
+- `Celeb-DF` only appears in `test_celebdf_manifest.jsonl`
 
 ### 3. Train the clean baseline
 
 ```bash
 python -u train_baseline.py \
   --dataset-root data/baseline \
-  --batch-size 8 \
-  --epochs 1 \
-  --num-workers 0 \
+  --batch-size 32 \
+  --epochs 20 \
+  --num-workers 4 \
   --image-size 224 \
-  --device mps
+  --device cuda \
+  --val-frames 20 \
+  --ffpp-test-frames 20 \
+  --celebdf-test-frames 100
 ```
 
-On Colab or CUDA machines, replace `--device mps` with `--device cuda`.
+If VRAM is tight, reduce `--batch-size` to `16`.
+
+### 4. Evaluate a saved baseline checkpoint
+
+```bash
+python evaluate_baseline.py \
+  --dataset-root data/baseline \
+  --checkpoint outputs/baseline_clean_last.pt \
+  --device cuda \
+  --ffpp-test-frames 20 \
+  --celebdf-test-frames 100
+```
+
+### 5. Colab notebook
+
+Use [baseline_clean_pipeline.ipynb](/Users/khoatran/coding/llm/moe-deepfake/baseline_clean_pipeline.ipynb) for the end-to-end Colab flow with the same paper-like baseline protocol.
 
 ## Staged Pipeline Commands
 

@@ -15,6 +15,7 @@ class DatasetSpec:
     root: str
     split: str
     frames_per_video: int = 8
+    group_by_video: bool = False
     image_size: int = 224
     face_detector: str = "mtcnn"
     processed_root: str | None = None
@@ -26,7 +27,7 @@ class DatasetSpec:
 
 @dataclass(slots=True)
 class BackboneConfig:
-    model_name: str = "vit_base_patch16_224"
+    model_name: str = "vit_base_patch16_224_in21k"
     pretrained: bool = True
     image_size: int = 224
     freeze: bool = True
@@ -113,14 +114,16 @@ class OptimizerConfig:
     optimizer: str = "adam"
     lr_gating: float = 1e-4
     lr_base: float = 3e-5
-    weight_decay: float = 1e-4
+    weight_decay: float = 1e-5
+    scheduler_step_size: int = 5
+    scheduler_gamma: float = 0.5
 
 
 @dataclass(slots=True)
 class TrainConfig:
-    batch_size: int = 16
-    num_workers: int = 2
-    epochs: int = 10
+    batch_size: int = 32
+    num_workers: int = 4
+    epochs: int = 20
     amp: bool = True
     seed: int = 42
 

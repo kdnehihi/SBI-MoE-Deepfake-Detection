@@ -18,10 +18,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate baseline clean checkpoint.")
     parser.add_argument("--dataset-root", type=str, default="data/baseline")
     parser.add_argument("--checkpoint", type=str, required=True)
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--num-workers", type=int, default=2)
+    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--ffpp-test-frames", type=int, default=20)
+    parser.add_argument("--celebdf-test-frames", type=int, default=100)
     return parser.parse_args()
 
 
@@ -64,6 +66,8 @@ def main() -> None:
         args.batch_size,
         args.num_workers,
         False,
+        group_by_video=True,
+        frames_per_video=args.ffpp_test_frames,
     )
     celebdf_loader = build_loader(
         dataset_root,
@@ -73,6 +77,8 @@ def main() -> None:
         args.batch_size,
         args.num_workers,
         False,
+        group_by_video=True,
+        frames_per_video=args.celebdf_test_frames,
     )
 
     ffpp_eval = Evaluator(model, ffpp_loader, criterion, device).evaluate()

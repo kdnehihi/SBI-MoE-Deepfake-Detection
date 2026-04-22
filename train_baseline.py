@@ -1,4 +1,4 @@
-"""Train the current model on the clean baseline dataset and evaluate on FF++ and Celeb-DF tests."""
+"""Train the baseline detector with a paper-like FF++/Celeb-DF protocol."""
 
 from __future__ import annotations
 
@@ -58,16 +58,19 @@ def _print_eval_summary(prefix: str, ffpp_eval: dict, celebdf_eval: dict) -> Non
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train baseline clean dataset.")
+    parser = argparse.ArgumentParser(description="Train paper-like baseline dataset.")
     parser.add_argument("--dataset-root", type=str, default="data/baseline")
     parser.add_argument("--output-dir", type=str, default="outputs")
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--num-workers", type=int, default=2)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--max-train-samples", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--val-frames", type=int, default=20)
+    parser.add_argument("--ffpp-test-frames", type=int, default=20)
+    parser.add_argument("--celebdf-test-frames", type=int, default=100)
     return parser.parse_args()
 
 
@@ -81,11 +84,18 @@ def build_loader(
     shuffle: bool,
     max_samples: int | None = None,
     seed: int = 42,
+    group_by_video: bool = False,
+    frames_per_video: int = 8,
 ) -> DataLoader:
+    if group_by_video and batch_size != 1:
+        print(f"{split_name}: overriding batch_size={batch_size} to 1 for video-style evaluation.")
+        batch_size = 1
     spec = DatasetSpec(
         name="Baseline",
         root=str(dataset_root),
         split=split_name,
+        group_by_video=group_by_video,
+        frames_per_video=frames_per_video,
         image_size=image_size,
         processed_root=str(dataset_root / split_name),
         manifest_path=str(dataset_root / manifest_name),
@@ -101,7 +111,8 @@ def build_loader(
             f"from {dataset_root / manifest_name} (seed={seed})"
         )
     else:
-        print(f"{split_name}: {original_count} samples from {dataset_root / manifest_name}")
+        item_name = "videos" if group_by_video else "samples"
+        print(f"{split_name}: {original_count} {item_name} from {dataset_root / manifest_name}")
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
 
 
@@ -121,9 +132,39 @@ def main() -> None:
         max_samples=args.max_train_samples,
         seed=args.seed,
     )
-    val_loader = build_loader(dataset_root, "val_manifest.jsonl", "val", args.image_size, args.batch_size, args.num_workers, False)
-    ffpp_test_loader = build_loader(dataset_root, "test_ffpp_manifest.jsonl", "test_ffpp", args.image_size, args.batch_size, args.num_workers, False)
-    celebdf_test_loader = build_loader(dataset_root, "test_celebdf_manifest.jsonl", "test_celebdf", args.image_size, args.batch_size, args.num_workers, False)
+    val_loader = build_loader(
+        dataset_root,
+        "val_manifest.jsonl",
+        "val",
+        args.image_size,
+        1,
+        args.num_workers,
+        False,
+        group_by_video=True,
+        frames_per_video=args.val_frames,
+    )
+    ffpp_test_loader = build_loader(
+        dataset_root,
+        "test_ffpp_manifest.jsonl",
+        "test_ffpp",
+        args.image_size,
+        1,
+        args.num_workers,
+        False,
+        group_by_video=True,
+        frames_per_video=args.ffpp_test_frames,
+    )
+    celebdf_test_loader = build_loader(
+        dataset_root,
+        "test_celebdf_manifest.jsonl",
+        "test_celebdf",
+        args.image_size,
+        1,
+        args.num_workers,
+        False,
+        group_by_video=True,
+        frames_per_video=args.celebdf_test_frames,
+    )
 
     model_config = ModelConfig()
     optimizer_config = OptimizerConfig()

@@ -50,22 +50,45 @@ class Evaluator:
 
         all_logits: list[torch.Tensor] = []
         all_labels: list[torch.Tensor] = []
+        video_predictions: list[float] = []
+        video_labels: list[int] = []
 
         with torch.no_grad():
             for images, labels in self.data_loader:
-                images = images.to(self.device)
-                labels = labels.to(self.device)
+                if images.ndim == 5:
+                    batch_size = images.size(0)
+                    for batch_index in range(batch_size):
+                        video_frames = images[batch_index].to(self.device)
+                        video_label = labels[batch_index].to(self.device)
+                        expanded_labels = video_label.expand(video_frames.size(0))
 
-                logits, aux = self.model(images)
-                loss_output = self.criterion(logits, labels, aux)
+                        logits, aux = self.model(video_frames)
+                        loss_output = self.criterion(logits, expanded_labels, aux)
 
-                total_loss += loss_output.total.item()
-                total_classification += loss_output.classification.item()
-                total_load_balance += loss_output.load_balance.item()
-                num_batches += 1
+                        total_loss += loss_output.total.item()
+                        total_classification += loss_output.classification.item()
+                        total_load_balance += loss_output.load_balance.item()
+                        num_batches += 1
 
-                all_logits.append(logits.detach().cpu())
-                all_labels.append(labels.detach().cpu())
+                        probabilities = torch.softmax(logits, dim=1)[:, 1].detach().cpu()
+                        all_logits.append(logits.detach().cpu())
+                        all_labels.append(expanded_labels.detach().cpu())
+                        video_predictions.append(float(probabilities.mean().item()))
+                        video_labels.append(int(video_label.item()))
+                else:
+                    images = images.to(self.device)
+                    labels = labels.to(self.device)
+
+                    logits, aux = self.model(images)
+                    loss_output = self.criterion(logits, labels, aux)
+
+                    total_loss += loss_output.total.item()
+                    total_classification += loss_output.classification.item()
+                    total_load_balance += loss_output.load_balance.item()
+                    num_batches += 1
+
+                    all_logits.append(logits.detach().cpu())
+                    all_labels.append(labels.detach().cpu())
 
         if num_batches == 0:
             return {
@@ -88,7 +111,19 @@ class Evaluator:
         )
 
         video_metrics = BinaryClassificationMetrics()
-        if video_ids and len(video_ids) == len(labels):
+        num_videos = 0
+        if video_predictions and video_labels:
+            video_scores = torch.tensor(video_predictions, dtype=probabilities.dtype)
+            video_label_tensor = torch.tensor(video_labels, dtype=labels.dtype)
+            video_predictions_binary = (video_scores >= 0.5).long()
+            video_metrics = BinaryClassificationMetrics(
+                accuracy=(video_predictions_binary == video_label_tensor).float().mean().item(),
+                auc=binary_auc(video_scores, video_label_tensor),
+                ap=binary_average_precision(video_scores, video_label_tensor),
+                eer=binary_eer(video_scores, video_label_tensor),
+            )
+            num_videos = len(video_labels)
+        elif video_ids and len(video_ids) == len(labels):
             video_scores, video_labels = aggregate_video_scores(probabilities, labels, video_ids, topk=5)
             video_predictions = (video_scores >= 0.5).long()
             video_metrics = BinaryClassificationMetrics(
@@ -97,6 +132,7 @@ class Evaluator:
                 ap=binary_average_precision(video_scores, video_labels),
                 eer=binary_eer(video_scores, video_labels),
             )
+            num_videos = len(video_labels)
 
         return {
             "loss": total_loss / num_batches,
@@ -105,5 +141,5 @@ class Evaluator:
             "metrics": metrics,
             "video_metrics": video_metrics,
             "num_frames": int(labels.numel()),
-            "num_videos": len(set(video_ids)) if video_ids else 0,
+            "num_videos": num_videos,
         }
