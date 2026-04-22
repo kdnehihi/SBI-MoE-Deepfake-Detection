@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from data.dataset import build_dataset
 from engine.eval import Evaluator
@@ -25,10 +25,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--max-train-samples", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
 
 
-def build_loader(dataset_root: Path, manifest_name: str, split_name: str, image_size: int, batch_size: int, num_workers: int, shuffle: bool) -> DataLoader:
+def build_loader(
+    dataset_root: Path,
+    manifest_name: str,
+    split_name: str,
+    image_size: int,
+    batch_size: int,
+    num_workers: int,
+    shuffle: bool,
+    max_samples: int | None = None,
+    seed: int = 42,
+) -> DataLoader:
     spec = DatasetSpec(
         name="Baseline",
         root=str(dataset_root),
@@ -38,7 +50,17 @@ def build_loader(dataset_root: Path, manifest_name: str, split_name: str, image_
         manifest_path=str(dataset_root / manifest_name),
     )
     dataset = build_dataset(spec)
-    print(f"{split_name}: {len(dataset)} samples from {dataset_root / manifest_name}")
+    original_count = len(dataset)
+    if max_samples is not None and max_samples < original_count:
+        generator = torch.Generator().manual_seed(seed)
+        indices = torch.randperm(original_count, generator=generator)[:max_samples].tolist()
+        dataset = Subset(dataset, indices)
+        print(
+            f"{split_name}: {len(dataset)} / {original_count} samples "
+            f"from {dataset_root / manifest_name} (seed={seed})"
+        )
+    else:
+        print(f"{split_name}: {original_count} samples from {dataset_root / manifest_name}")
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
 
 
@@ -47,7 +69,17 @@ def main() -> None:
     dataset_root = Path(args.dataset_root)
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
 
-    train_loader = build_loader(dataset_root, "train_manifest.jsonl", "train", args.image_size, args.batch_size, args.num_workers, True)
+    train_loader = build_loader(
+        dataset_root,
+        "train_manifest.jsonl",
+        "train",
+        args.image_size,
+        args.batch_size,
+        args.num_workers,
+        True,
+        max_samples=args.max_train_samples,
+        seed=args.seed,
+    )
     ffpp_test_loader = build_loader(dataset_root, "test_ffpp_manifest.jsonl", "test_ffpp", args.image_size, args.batch_size, args.num_workers, False)
     celebdf_test_loader = build_loader(dataset_root, "test_celebdf_manifest.jsonl", "test_celebdf", args.image_size, args.batch_size, args.num_workers, False)
 
@@ -58,6 +90,7 @@ def main() -> None:
         epochs=args.epochs,
         num_workers=args.num_workers,
         amp=True,
+        seed=args.seed,
     )
 
     model = MoEFFDDetector(model_config).to(device)
