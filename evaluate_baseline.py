@@ -22,8 +22,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--device", type=str, default=None)
-    parser.add_argument("--ffpp-test-frames", type=int, default=20)
-    parser.add_argument("--celebdf-test-frames", type=int, default=100)
     return parser.parse_args()
 
 
@@ -67,7 +65,6 @@ def main() -> None:
         args.num_workers,
         False,
         group_by_video=True,
-        frames_per_video=args.ffpp_test_frames,
     )
     celebdf_loader = build_loader(
         dataset_root,
@@ -78,7 +75,6 @@ def main() -> None:
         args.num_workers,
         False,
         group_by_video=True,
-        frames_per_video=args.celebdf_test_frames,
     )
 
     ffpp_eval = Evaluator(model, ffpp_loader, criterion, device).evaluate()

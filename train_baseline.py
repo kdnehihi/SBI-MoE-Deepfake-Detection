@@ -68,9 +68,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--max-train-samples", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--val-frames", type=int, default=20)
-    parser.add_argument("--ffpp-test-frames", type=int, default=20)
-    parser.add_argument("--celebdf-test-frames", type=int, default=100)
     return parser.parse_args()
 
 
@@ -141,7 +138,6 @@ def main() -> None:
         args.num_workers,
         False,
         group_by_video=True,
-        frames_per_video=args.val_frames,
     )
     ffpp_test_loader = build_loader(
         dataset_root,
@@ -152,7 +148,6 @@ def main() -> None:
         args.num_workers,
         False,
         group_by_video=True,
-        frames_per_video=args.ffpp_test_frames,
     )
     celebdf_test_loader = build_loader(
         dataset_root,
@@ -163,7 +158,6 @@ def main() -> None:
         args.num_workers,
         False,
         group_by_video=True,
-        frames_per_video=args.celebdf_test_frames,
     )
 
     model_config = ModelConfig()

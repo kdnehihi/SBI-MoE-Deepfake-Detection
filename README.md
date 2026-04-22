@@ -247,13 +247,12 @@ python -u train_baseline.py \
   --epochs 20 \
   --num-workers 4 \
   --image-size 224 \
-  --device cuda \
-  --val-frames 20 \
-  --ffpp-test-frames 20 \
-  --celebdf-test-frames 100
+  --device cuda
 ```
 
 If VRAM is tight, reduce `--batch-size` to `16`.
+
+Video-style validation and testing use the extracted frames already present in each manifest. With the current processed data, that is typically about `8` frames per video.
 
 ### 4. Evaluate a saved baseline checkpoint
 
@@ -261,9 +260,7 @@ If VRAM is tight, reduce `--batch-size` to `16`.
 python evaluate_baseline.py \
   --dataset-root data/baseline \
   --checkpoint outputs/baseline_clean_last.pt \
-  --device cuda \
-  --ffpp-test-frames 20 \
-  --celebdf-test-frames 100
+  --device cuda
 ```
 
 ### 5. Colab notebook
