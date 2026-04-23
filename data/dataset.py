@@ -48,7 +48,49 @@ def _manifest_path(spec: DatasetSpec) -> Path:
     return _processed_root(spec) / f"{spec.name.lower()}_{spec.split}_manifest.jsonl"
 
 
-def _load_manifest(manifest_path: Path) -> list[FaceSample]:
+def _resolve_manifest_image_path(image_path: Path, spec: DatasetSpec) -> Path:
+    if image_path.is_absolute():
+        return image_path
+
+    dataset_root = Path(spec.root).resolve()
+    processed_root = _processed_root(spec).resolve()
+    path_parts = image_path.parts
+
+    if dataset_root.name in path_parts:
+        suffix = path_parts[path_parts.index(dataset_root.name) + 1 :]
+        return dataset_root.joinpath(*suffix).resolve()
+
+    if processed_root.name in path_parts:
+        suffix = path_parts[path_parts.index(processed_root.name) + 1 :]
+        return processed_root.joinpath(*suffix).resolve()
+
+    # First try the most direct interpretation: path relative to the dataset root.
+    direct_candidate = (dataset_root / image_path).resolve()
+    if direct_candidate.exists():
+        return direct_candidate
+
+    # Stage manifests often store paths like `data/stages/stage1_sbi/...`; anchor them back to
+    # the actual dataset root mounted on Drive instead of the repo checkout.
+    root_parts = dataset_root.parts
+    for anchor_index in range(len(root_parts) - 1, -1, -1):
+        anchor = root_parts[anchor_index]
+        if anchor in path_parts:
+            suffix = path_parts[path_parts.index(anchor) + 1 :]
+            return dataset_root.joinpath(*suffix).resolve()
+
+    processed_parts = processed_root.parts
+    for anchor_index in range(len(processed_parts) - 1, -1, -1):
+        anchor = processed_parts[anchor_index]
+        if anchor in path_parts:
+            suffix = path_parts[path_parts.index(anchor) + 1 :]
+            return processed_root.joinpath(*suffix).resolve()
+
+    # Fall back to preserving the relative structure under the dataset root so callers still get
+    # a deterministic path even if the file is missing.
+    return (dataset_root / image_path).resolve()
+
+
+def _load_manifest(manifest_path: Path, spec: DatasetSpec) -> list[FaceSample]:
     if not manifest_path.exists():
         return []
     samples: list[FaceSample] = []
@@ -57,7 +99,7 @@ def _load_manifest(manifest_path: Path) -> list[FaceSample]:
             payload = json.loads(line)
             samples.append(
                 FaceSample(
-                    image_path=Path(payload["image_path"]),
+                    image_path=_resolve_manifest_image_path(Path(payload["image_path"]), spec),
                     label=int(payload["label"]),
                     dataset_name=payload["dataset_name"],
                     video_id=payload["video_id"],
@@ -112,7 +154,7 @@ class FaceForgeryDataset(Dataset):
         self.samples = self._index_samples()
 
     def _index_samples(self) -> list[FaceSample]:
-        manifest_samples = _load_manifest(_manifest_path(self.spec))
+        manifest_samples = _load_manifest(_manifest_path(self.spec), self.spec)
         if manifest_samples:
             return manifest_samples
         return _infer_samples_from_processed_dir(self.spec)
@@ -139,7 +181,7 @@ class VideoFaceForgeryDataset(Dataset):
         self.samples = self._index_samples()
 
     def _index_samples(self) -> list[VideoSample]:
-        manifest_samples = _load_manifest(_manifest_path(self.spec))
+        manifest_samples = _load_manifest(_manifest_path(self.spec), self.spec)
         if not manifest_samples:
             manifest_samples = _infer_samples_from_processed_dir(self.spec)
 
