@@ -113,23 +113,25 @@ def _load_manifest(manifest_path: Path, spec: DatasetSpec) -> list[FaceSample]:
 
 def _fallback_stage1_path(path: Path, spec: DatasetSpec) -> Path:
     dataset_root = Path(spec.root).resolve()
-    if dataset_root.name != "stage1_sbi":
+    if not dataset_root.name.startswith("stage"):
         return path
 
     split = spec.split
     data_root = dataset_root.parents[1]
     stem_parts = path.stem.split("__")
+    label_dir = path.parent.name
 
     # Stage 1 real files are materialized under `train/real` or `val/real`, but on Drive those
     # symlinks are often missing. Recover the original processed FF++ frame directly.
     if len(stem_parts) == 4 and stem_parts[0] == "FF++" and stem_parts[1] == "original":
         video_id = stem_parts[2]
         frame_index = stem_parts[3]
+        ffpp_split = "train" if split in {"train", "val"} else "test"
         return (
             data_root
             / "processed"
             / "ffpp_generalization"
-            / "train"
+            / ffpp_split
             / "original"
             / video_id
             / f"{frame_index}.png"
@@ -151,6 +153,34 @@ def _fallback_stage1_path(path: Path, spec: DatasetSpec) -> Path:
                 / "fake"
                 / f"sbi__FF++__{original_video}__{frame_index}.png"
             )
+
+    # Stage test splits are often materialized as symlinks too. Recover the underlying processed
+    # FF++ or Celeb-DF frame directly when those symlinks are not present on Drive.
+    if len(stem_parts) == 4 and stem_parts[0] == "FF++":
+        manipulation = stem_parts[1]
+        video_id = stem_parts[2]
+        frame_index = stem_parts[3]
+        return (
+            data_root
+            / "processed"
+            / "ffpp_generalization"
+            / "test"
+            / manipulation
+            / video_id
+            / f"{frame_index}.png"
+        )
+
+    if len(stem_parts) == 4 and stem_parts[0] == "CelebDF":
+        video_id = stem_parts[2]
+        frame_index = stem_parts[3]
+        return (
+            data_root
+            / "processed"
+            / "celebdf"
+            / "test"
+            / label_dir
+            / f"{video_id}_frame_{frame_index}.png"
+        )
 
     return path
 

@@ -78,6 +78,20 @@ def run_stage_training(
     )
     history = trainer.fit(val_loader=val_loader)
 
+    output_dir = Path("outputs")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = output_dir / output_name
+    torch.save(
+        {
+            "model_state_dict": model.state_dict(),
+            "history": history,
+            "model_config": model_config,
+            "init_checkpoint": init_checkpoint,
+        },
+        checkpoint_path,
+    )
+    print(f"Saved checkpoint after train/val to: {checkpoint_path}")
+
     ffpp_eval = Evaluator(model, ffpp_test_loader, criterion, device).evaluate()
     celebdf_eval = Evaluator(model, celebdf_test_loader, criterion, device).evaluate()
 
@@ -90,9 +104,6 @@ def run_stage_training(
         f"acc={celebdf_eval['metrics'].accuracy:.4f} | auc={celebdf_eval['metrics'].auc:.4f}"
     )
 
-    output_dir = Path("outputs")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = output_dir / output_name
     torch.save(
         {
             "model_state_dict": model.state_dict(),
