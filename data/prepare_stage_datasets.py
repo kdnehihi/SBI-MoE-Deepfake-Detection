@@ -145,46 +145,65 @@ def prepare_stage2(
     seed: int,
     overwrite: bool,
     ffpp_fake_ratio: float = 0.42,
-    celebdf_fake_ratio: float = 0.18,
+    sbi_fake_ratio: float = 0.18,
 ) -> None:
     sources = _load_sources(celebdf_root, ffpp_root)
-    train_real_pool, val_real_pool = _split_real_pool(sources["celebdf_train"], sources["ffpp_train"], val_ratio, seed)
+    train_real_pool, val_real_pool = _split_ffpp_original_pool(sources["ffpp_train"], val_ratio, seed)
 
     ffpp_fake_train, ffpp_fake_val = split_by_group(
         filter_ffpp_fake_types(sources["ffpp_train"], FFPP_FAKE_TYPES),
         val_ratio=val_ratio,
         seed=seed + 1,
     )
-    celebdf_fake_train, celebdf_fake_val = split_by_group(
-        filter_by_label(sources["celebdf_train"], 1),
-        val_ratio=val_ratio,
-        seed=seed + 2,
-    )
 
-    ratios = {"real": 0.4, "ffpp_fake": ffpp_fake_ratio, "celebdf_fake": celebdf_fake_ratio}
+    ratios = {"real": 0.4, "ffpp_fake": ffpp_fake_ratio, "sbi_fake": sbi_fake_ratio}
 
     train_total = compute_total_target(
-        {"real": len(train_real_pool), "ffpp_fake": len(ffpp_fake_train), "celebdf_fake": len(celebdf_fake_train)},
+        {"real": len(train_real_pool), "ffpp_fake": len(ffpp_fake_train), "sbi_fake": len(train_real_pool)},
         ratios,
     )
     val_total = compute_total_target(
-        {"real": len(val_real_pool), "ffpp_fake": len(ffpp_fake_val), "celebdf_fake": len(celebdf_fake_val)},
+        {"real": len(val_real_pool), "ffpp_fake": len(ffpp_fake_val), "sbi_fake": len(val_real_pool)},
         ratios,
     )
 
     train_counts = compute_counts(train_total, ratios)
     val_counts = compute_counts(val_total, ratios)
 
+    train_real = sample_without_replacement(train_real_pool, train_counts["real"], seed)
+    train_ffpp_fake = sample_without_replacement(ffpp_fake_train, train_counts["ffpp_fake"], seed + 3)
+    train_sbi: list[dict] = []
+    if train_counts["sbi_fake"] > 0:
+        train_sbi_sources = sample_without_replacement(train_real_pool, train_counts["sbi_fake"], seed + 4)
+        train_sbi, _ = generate_sbi_samples(
+            real_samples=train_sbi_sources,
+            count=train_counts["sbi_fake"],
+            output_root=output_root / "_generated_sbi",
+            split_name="train",
+            seed=seed + 5,
+            overwrite=overwrite,
+        )
+
+    val_real = sample_without_replacement(val_real_pool, val_counts["real"], seed + 6)
+    val_ffpp_fake = sample_without_replacement(ffpp_fake_val, val_counts["ffpp_fake"], seed + 7)
+    val_sbi: list[dict] = []
+    if val_counts["sbi_fake"] > 0:
+        val_sbi_sources = sample_without_replacement(val_real_pool, val_counts["sbi_fake"], seed + 8)
+        val_sbi, _ = generate_sbi_samples(
+            real_samples=val_sbi_sources,
+            count=val_counts["sbi_fake"],
+            output_root=output_root / "_generated_sbi",
+            split_name="val",
+            seed=seed + 9,
+            overwrite=overwrite,
+        )
+
     train_samples = (
-        sample_without_replacement(train_real_pool, train_counts["real"], seed)
-        + sample_without_replacement(ffpp_fake_train, train_counts["ffpp_fake"], seed + 3)
-        + sample_without_replacement(celebdf_fake_train, train_counts["celebdf_fake"], seed + 4)
+        train_real
+        + train_ffpp_fake
+        + train_sbi
     )
-    val_samples = (
-        sample_without_replacement(val_real_pool, val_counts["real"], seed + 5)
-        + sample_without_replacement(ffpp_fake_val, val_counts["ffpp_fake"], seed + 6)
-        + sample_without_replacement(celebdf_fake_val, val_counts["celebdf_fake"], seed + 7)
-    )
+    val_samples = val_real + val_ffpp_fake + val_sbi
 
     materialize_split(train_samples, output_root / "train", "train_manifest.jsonl", overwrite=overwrite)
     materialize_split(val_samples, output_root / "val", "val_manifest.jsonl", overwrite=overwrite)
@@ -193,6 +212,7 @@ def prepare_stage2(
     print("Prepared stage2 dataset")
     print("train counts:", train_counts)
     print("val counts:", val_counts)
+    print("stage2 train sources: FF++ original real + FF++ fake + SBI fake")
 
 
 def prepare_stage3(
@@ -303,7 +323,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--stage2-ffpp-fake-ratio", type=float, default=0.42)
-    parser.add_argument("--stage2-celebdf-fake-ratio", type=float, default=0.18)
+    parser.add_argument("--stage2-sbi-fake-ratio", type=float, default=0.18)
     parser.add_argument("--stage3-ffpp-fake-ratio", type=float, default=0.36)
     parser.add_argument("--stage3-celebdf-fake-ratio", type=float, default=0.15)
     parser.add_argument("--stage3-sbi-fake-ratio", type=float, default=0.09)
@@ -327,7 +347,7 @@ def main() -> None:
             args.seed,
             args.overwrite,
             ffpp_fake_ratio=args.stage2_ffpp_fake_ratio,
-            celebdf_fake_ratio=args.stage2_celebdf_fake_ratio,
+            sbi_fake_ratio=args.stage2_sbi_fake_ratio,
         )
     else:
         prepare_stage3(
