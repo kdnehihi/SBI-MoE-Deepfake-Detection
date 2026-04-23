@@ -1,4 +1,4 @@
-"""Stage 2 training: real deepfake adaptation with LoRA only."""
+"""Stage 2 training: real deepfake adaptation with the full MoE detector."""
 
 from __future__ import annotations
 

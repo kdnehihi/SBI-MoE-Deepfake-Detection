@@ -22,8 +22,8 @@ def build_stage2_model_config() -> ModelConfig:
     config.stage = StageConfig(
         name="stage2",
         enable_lora=True,
-        enable_adapter=False,
-        enable_moe_router=False,
+        enable_adapter=True,
+        enable_moe_router=True,
         enable_classifier=True,
     )
     return config
