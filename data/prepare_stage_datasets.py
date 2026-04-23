@@ -26,12 +26,50 @@ from data.sbi_generator import generate_sbi_samples
 FFPP_FAKE_TYPES = {"Deepfakes", "FaceSwap", "Face2Face", "NeuralTextures"}
 
 
+def _resolve_image_path(sample: dict, celebdf_root: Path, ffpp_root: Path) -> dict:
+    resolved = dict(sample)
+    image_path = Path(str(sample["image_path"]))
+    if image_path.is_absolute():
+        resolved["image_path"] = str(image_path)
+        return resolved
+
+    dataset_name = str(sample.get("dataset_name", ""))
+    if dataset_name == "CelebDF":
+        root = celebdf_root
+    elif dataset_name == "FF++":
+        root = ffpp_root
+    else:
+        root = celebdf_root if "celebdf" in str(image_path).lower() else ffpp_root
+
+    parts = image_path.parts
+    anchor = root.name
+    if anchor in parts:
+        anchor_index = parts.index(anchor)
+        suffix = parts[anchor_index + 1 :]
+        resolved["image_path"] = str(root.joinpath(*suffix))
+    else:
+        resolved["image_path"] = str((root / image_path).resolve())
+    return resolved
+
+
 def _load_sources(celebdf_root: Path, ffpp_root: Path) -> dict[str, list[dict]]:
     return {
-        "celebdf_train": load_manifest(celebdf_root / "celebdf_train_manifest.jsonl"),
-        "celebdf_test": load_manifest(celebdf_root / "celebdf_test_manifest.jsonl"),
-        "ffpp_train": load_manifest(ffpp_root / "ffpp_generalization_train_manifest.jsonl"),
-        "ffpp_test": load_manifest(ffpp_root / "ffpp_generalization_test_manifest.jsonl"),
+        "celebdf_train": [
+            _resolve_image_path(sample, celebdf_root, ffpp_root)
+            for sample in load_manifest(celebdf_root / "celebdf_train_manifest.jsonl")
+        ],
+        "celebdf_test": [
+            _resolve_image_path(sample, celebdf_root, ffpp_root)
+            for sample in load_manifest(celebdf_root / "celebdf_test_manifest.jsonl")
+        ],
+        "ffpp_train": [
+            _resolve_image_path(sample, celebdf_root, ffpp_root)
+            for sample in load_manifest(ffpp_root / "ffpp_generalization_train_manifest.jsonl")
+        ],
+        "ffpp_test": [
+            _resolve_image_path(sample, celebdf_root, ffpp_root)
+            for sample in load_manifest(ffpp_root / "ffpp_generalization_test_manifest.jsonl")
+        ],
     }
 
 
