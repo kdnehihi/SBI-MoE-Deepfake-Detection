@@ -111,6 +111,60 @@ def _load_manifest(manifest_path: Path, spec: DatasetSpec) -> list[FaceSample]:
     return samples
 
 
+def _fallback_stage1_path(path: Path, spec: DatasetSpec) -> Path:
+    dataset_root = Path(spec.root).resolve()
+    if dataset_root.name != "stage1_sbi":
+        return path
+
+    split = spec.split
+    data_root = dataset_root.parents[1]
+    stem_parts = path.stem.split("__")
+
+    # Stage 1 real files are materialized under `train/real` or `val/real`, but on Drive those
+    # symlinks are often missing. Recover the original processed FF++ frame directly.
+    if len(stem_parts) == 4 and stem_parts[0] == "FF++" and stem_parts[1] == "original":
+        video_id = stem_parts[2]
+        frame_index = stem_parts[3]
+        return (
+            data_root
+            / "processed"
+            / "ffpp_generalization"
+            / "train"
+            / "original"
+            / video_id
+            / f"{frame_index}.png"
+        )
+
+    # Stage 1 SBI fakes are generated under `_generated_sbi/<split>/fake`, but manifests point to
+    # materialized `train/fake` entries such as `SBI__SBI__sbi_846_01528__01528.png`.
+    if len(stem_parts) == 4 and stem_parts[0] == "SBI" and stem_parts[1] == "SBI":
+        video_id = stem_parts[2]
+        frame_index = stem_parts[3]
+        prefix = "sbi_"
+        if video_id.startswith(prefix):
+            original = video_id[len(prefix) :]
+            original_video = original.rsplit("_", 1)[0]
+            return (
+                dataset_root
+                / "_generated_sbi"
+                / split
+                / "fake"
+                / f"sbi__FF++__{original_video}__{frame_index}.png"
+            )
+
+    return path
+
+
+def _resolve_existing_image_path(path: Path, spec: DatasetSpec) -> Path:
+    if path.exists():
+        return path
+
+    fallback = _fallback_stage1_path(path, spec)
+    if fallback != path:
+        return fallback
+    return path
+
+
 def _infer_samples_from_processed_dir(spec: DatasetSpec) -> list[FaceSample]:
     processed_split_root = _processed_root(spec) / spec.split
     samples: list[FaceSample] = []
@@ -163,6 +217,7 @@ class FaceForgeryDataset(Dataset):
         return len(self.samples)
 
     def load_image(self, path: Path) -> Image.Image:
+        path = _resolve_existing_image_path(path, self.spec)
         return Image.open(path).convert("RGB")
 
     def __getitem__(self, index: int) -> tuple[Tensor, int]:
@@ -211,6 +266,7 @@ class VideoFaceForgeryDataset(Dataset):
         return len(self.samples)
 
     def load_image(self, path: Path) -> Image.Image:
+        path = _resolve_existing_image_path(path, self.spec)
         return Image.open(path).convert("RGB")
 
     def _select_frames(self, frames: list[FaceSample]) -> list[FaceSample]:
