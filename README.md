@@ -101,8 +101,8 @@ Model:
 
 - ViT frozen
 - LoRA on
-- adapter off
-- MoE router off
+- adapter on
+- MoE router on
 - classifier on
 
 Data:
@@ -120,6 +120,7 @@ Stage 1 is intentionally aligned with the baseline story:
 - training real data comes only from `FF++`
 - `Celeb-DF` is not used in Stage 1 training
 - `Celeb-DF` remains an OOD evaluation target
+- model structure stays the same as the main MoE detector; only the training data changes
 
 ### Stage 2: Real Deepfake Adaptation
 

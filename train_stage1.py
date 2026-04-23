@@ -1,4 +1,4 @@
-"""Stage 1 training: SBI pretraining with LoRA only."""
+"""Stage 1 training: SBI pretraining with the full MoE detector."""
 
 from __future__ import annotations
 
