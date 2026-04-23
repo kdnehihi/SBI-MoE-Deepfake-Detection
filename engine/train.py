@@ -44,6 +44,7 @@ class Trainer:
         self.use_amp = train_config.amp and self.device.startswith("cuda")
         self.autocast_device = "cuda" if self.device.startswith("cuda") else "cpu"
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
+        self.moe_log_interval = 100
 
     def build_optimizer(self):
         gating_parameters = []
@@ -83,6 +84,49 @@ class Trainer:
             step_size=self.optimizer_config.scheduler_step_size,
             gamma=self.optimizer_config.scheduler_gamma,
         )
+
+    @staticmethod
+    def _format_vector(values: torch.Tensor) -> str:
+        return "[" + ", ".join(f"{value:.2f}" for value in values.tolist()) + "]"
+
+    def _summarize_moe_usage(self, aux) -> dict[str, torch.Tensor]:
+        lora_importance = []
+        lora_load = []
+        adapter_importance = []
+        adapter_load = []
+
+        for block_aux in getattr(aux, "blocks", []):
+            lora_importance.append(block_aux.lora.qkv.importance.detach().float().cpu())
+            lora_load.append(block_aux.lora.qkv.load.detach().float().cpu())
+            adapter_importance.append(block_aux.adapter.importance.detach().float().cpu())
+            adapter_load.append(block_aux.adapter.load.detach().float().cpu())
+
+        summary: dict[str, torch.Tensor] = {}
+        if lora_importance:
+            summary["lora_importance"] = torch.stack(lora_importance).mean(dim=0)
+            summary["lora_load"] = torch.stack(lora_load).mean(dim=0)
+        if adapter_importance:
+            summary["adapter_importance"] = torch.stack(adapter_importance).mean(dim=0)
+            summary["adapter_load"] = torch.stack(adapter_load).mean(dim=0)
+        return summary
+
+    def _print_moe_usage(self, aux, prefix: str) -> None:
+        summary = self._summarize_moe_usage(aux)
+        if not summary:
+            return
+
+        if "lora_importance" in summary:
+            print(
+                f"{prefix} | "
+                f"lora_imp={self._format_vector(summary['lora_importance'])} | "
+                f"lora_load={self._format_vector(summary['lora_load'])}"
+            )
+        if "adapter_importance" in summary:
+            print(
+                f"{prefix} | "
+                f"adapter_imp={self._format_vector(summary['adapter_importance'])} | "
+                f"adapter_load={self._format_vector(summary['adapter_load'])}"
+            )
 
     def train_epoch(self):
         self.model.train()
@@ -134,6 +178,14 @@ class Trainer:
                     f"lb={loss_output.load_balance.item():.4f} | "
                     f"acc={running_acc:.4f} | "
                     f"time={elapsed:.1f}s"
+                )
+            if batch_index == 1 or batch_index % self.moe_log_interval == 0 or batch_index == total_batches:
+                self._print_moe_usage(
+                    aux,
+                    prefix=(
+                        f"MoE | epoch {self.state.epoch}/{self.train_config.epochs} | "
+                        f"batch {batch_index}/{total_batches}"
+                    ),
                 )
 
         if num_batches == 0:
