@@ -185,11 +185,54 @@ def _fallback_stage1_path(path: Path, spec: DatasetSpec) -> Path:
     return path
 
 
+def _fallback_baseline_path(path: Path, spec: DatasetSpec) -> Path:
+    dataset_root = Path(spec.root).resolve()
+    if dataset_root.name != "baseline":
+        return path
+
+    data_root = dataset_root.parent
+    label_dir = path.parent.parent.name if len(path.parents) >= 2 else ""
+    video_id = path.parent.name
+    frame_name = path.name
+    split_name = path.parts[-4] if len(path.parts) >= 4 else spec.split
+
+    if split_name in {"train", "val"}:
+        return (
+            data_root
+            / "processed"
+            / "ffpp_generalization"
+            / "train"
+            / label_dir
+            / video_id
+            / frame_name
+        )
+
+    if split_name == "test_ffpp":
+        return (
+            data_root
+            / "processed"
+            / "ffpp_generalization"
+            / "test"
+            / label_dir
+            / video_id
+            / frame_name
+        )
+
+    if split_name == "test_celebdf":
+        frame_stem = Path(frame_name).stem
+        return data_root / "processed" / "celebdf" / "test" / label_dir / f"{video_id}_frame_{frame_stem}.png"
+
+    return path
+
+
 def _resolve_existing_image_path(path: Path, spec: DatasetSpec) -> Path:
     if path.exists():
         return path
 
     fallback = _fallback_stage1_path(path, spec)
+    if fallback != path:
+        return fallback
+    fallback = _fallback_baseline_path(path, spec)
     if fallback != path:
         return fallback
     return path
