@@ -45,7 +45,17 @@ def _evaluation_to_dict(evaluation: dict) -> dict:
     }
 
 
-def build_loader(dataset_root: Path, manifest_name: str, split_name: str, image_size: int, batch_size: int, num_workers: int, shuffle: bool) -> DataLoader:
+def build_loader(
+    dataset_root: Path,
+    manifest_name: str,
+    split_name: str,
+    image_size: int,
+    batch_size: int,
+    num_workers: int,
+    shuffle: bool,
+    frequency_debias_prob: float = 0.0,
+    frequency_debias_strength: float = 0.0,
+) -> DataLoader:
     spec = DatasetSpec(
         name="StageDataset",
         root=str(dataset_root),
@@ -53,6 +63,8 @@ def build_loader(dataset_root: Path, manifest_name: str, split_name: str, image_
         image_size=image_size,
         processed_root=str(dataset_root / split_name),
         manifest_path=str(dataset_root / manifest_name),
+        frequency_debias_prob=frequency_debias_prob if split_name == "train" else 0.0,
+        frequency_debias_strength=frequency_debias_strength if split_name == "train" else 0.0,
     )
     dataset = build_dataset(spec)
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
@@ -77,9 +89,21 @@ def run_stage_training(
     device: str,
     init_checkpoint: str | None = None,
     output_dir: str = "outputs",
+    frequency_debias_prob: float = 0.0,
+    frequency_debias_strength: float = 0.0,
 ) -> None:
     dataset_path = Path(dataset_root)
-    train_loader = build_loader(dataset_path, "train_manifest.jsonl", "train", image_size, batch_size, num_workers, True)
+    train_loader = build_loader(
+        dataset_path,
+        "train_manifest.jsonl",
+        "train",
+        image_size,
+        batch_size,
+        num_workers,
+        True,
+        frequency_debias_prob=frequency_debias_prob,
+        frequency_debias_strength=frequency_debias_strength,
+    )
     val_loader = build_loader(dataset_path, "val_manifest.jsonl", "val", image_size, batch_size, num_workers, False)
     ffpp_test_loader = build_loader(dataset_path, "test_ffpp_manifest.jsonl", "test_ffpp", image_size, batch_size, num_workers, False)
     celebdf_test_loader = build_loader(dataset_path, "test_celebdf_manifest.jsonl", "test_celebdf", image_size, batch_size, num_workers, False)

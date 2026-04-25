@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import math
 
 import numpy as np
 import torch
@@ -79,6 +80,33 @@ def _build_compose(transforms_list):
     except ImportError:
         return Compose(transforms_list)
     return transforms.Compose(transforms_list)
+
+
+def apply_frequency_debias(image: Image.Image, strength: float) -> Image.Image:
+    if strength <= 0:
+        return image
+
+    array = np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
+    height, width, _ = array.shape
+
+    spectrum = np.fft.fft2(array, axes=(0, 1))
+    amplitude = np.abs(spectrum)
+    phase = np.angle(spectrum)
+
+    grid_h = max(4, min(16, height // 16 or 4))
+    grid_w = max(4, min(16, width // 16 or 4))
+    lowres_noise = np.random.uniform(-1.0, 1.0, size=(grid_h, grid_w, 1)).astype(np.float32)
+
+    repeat_h = math.ceil(height / grid_h)
+    repeat_w = math.ceil(width / grid_w)
+    smooth_noise = np.kron(lowres_noise, np.ones((repeat_h, repeat_w, 1), dtype=np.float32))
+    smooth_noise = smooth_noise[:height, :width, :]
+
+    perturbed_amplitude = amplitude * np.clip(1.0 + (strength * smooth_noise), 0.0, None)
+    reconstructed = np.fft.ifft2(perturbed_amplitude * np.exp(1j * phase), axes=(0, 1)).real
+    reconstructed = np.clip(reconstructed, 0.0, 1.0)
+    reconstructed_uint8 = (reconstructed * 255.0).astype(np.uint8)
+    return Image.fromarray(reconstructed_uint8, mode="RGB")
 
 
 def build_train_transforms(spec: DatasetSpec):

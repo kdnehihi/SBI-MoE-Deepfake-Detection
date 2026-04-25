@@ -11,7 +11,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import ConcatDataset, Dataset
 
-from data.transforms import build_eval_transforms, build_train_transforms
+from data.transforms import apply_frequency_debias, build_eval_transforms, build_train_transforms
 from utils.config import DatasetSpec
 
 
@@ -290,6 +290,8 @@ class FaceForgeryDataset(Dataset):
             build_train_transforms(spec) if spec.split.lower() == "train" else build_eval_transforms(spec)
         )
         self.samples = self._index_samples()
+        self.frequency_debias_prob = max(float(spec.frequency_debias_prob), 0.0)
+        self.frequency_debias_strength = max(float(spec.frequency_debias_strength), 0.0)
 
     def _index_samples(self) -> list[FaceSample]:
         manifest_samples = _load_manifest(_manifest_path(self.spec), self.spec)
@@ -304,9 +306,21 @@ class FaceForgeryDataset(Dataset):
         path = _resolve_existing_image_path(path, self.spec)
         return Image.open(path).convert("RGB")
 
+    def _maybe_apply_frequency_debias(self, image: Image.Image, label: int) -> Image.Image:
+        if self.spec.split.lower() != "train":
+            return image
+        if label != 1:
+            return image
+        if self.frequency_debias_prob <= 0 or self.frequency_debias_strength <= 0:
+            return image
+        if torch.rand(1).item() >= self.frequency_debias_prob:
+            return image
+        return apply_frequency_debias(image, self.frequency_debias_strength)
+
     def __getitem__(self, index: int) -> tuple[Tensor, int]:
         sample = self.samples[index]
         image = self.load_image(sample.image_path)
+        image = self._maybe_apply_frequency_debias(image, sample.label)
         tensor = self.transform(image) if self.transform is not None else image
         return tensor, sample.label
 

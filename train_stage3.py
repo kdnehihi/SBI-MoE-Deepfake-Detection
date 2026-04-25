@@ -19,6 +19,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--output-dir", type=str, default="outputs")
+    parser.add_argument("--freq-debias-prob", type=float, default=0.0)
+    parser.add_argument("--freq-debias-strength", type=float, default=0.0)
     parser.add_argument("--device", type=str, default=None)
     return parser.parse_args()
 
@@ -37,6 +39,8 @@ def main() -> None:
         device=device,
         init_checkpoint=args.init_checkpoint,
         output_dir=args.output_dir,
+        frequency_debias_prob=args.freq_debias_prob,
+        frequency_debias_strength=args.freq_debias_strength,
     )
 
 

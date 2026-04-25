@@ -23,6 +23,8 @@ class DatasetSpec:
     max_videos: int | None = None
     detector_margin: int = 24
     overwrite_processed: bool = False
+    frequency_debias_prob: float = 0.0
+    frequency_debias_strength: float = 0.0
 
 
 @dataclass(slots=True)
