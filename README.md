@@ -4,6 +4,8 @@
 
 This repository contains a research-oriented PyTorch implementation of a Mixture-of-Experts (MoE) deepfake detector inspired by MoE-FFD.
 
+Result and more information you can find in Report Folder
+
 ![Two-stage SBI + MoE-FFD framework](assets/two_stage_sbi_moeffd_framework.png)
 
 The current model design uses:
